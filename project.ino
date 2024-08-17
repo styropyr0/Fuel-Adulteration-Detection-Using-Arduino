@@ -12,43 +12,24 @@
 const int led = 7, s0 = 2, s1 = 3, s2 = 4, s3 = 5, OUT = A0;
 TFT scr = TFT(cs, dc, rst);
 
-class autoBrightness {
-private:
-  bool state = false;
-  uint8_t brightness = 255;
-  int pin;
-public:
-  autoBrightness(int p) {
-    pinMode(p, OUTPUT);
-    pin = p;
-  }
-  void setState(bool b) {
-    state = b;
-  }
-  void run() {
-    if (state == true)
-      start();
-    else
-      stop();
-  }
-  void start() {
-    int temp = (analogRead(A1) / 1.5);
-    if (abs(temp - brightness) > 25) {
-      if (temp < 20)
-        temp = 20;
-      analogWrite(pin, temp);
-      brightness = temp;
-    }
-    Serial.println(temp);
-  }
-  void stop() {
-    brightness = 255;
-    analogWrite(pin, brightness);
-  }
+enum calibColor : int {
+  MIN_R = 180,
+  MIN_G = 186,
+  MIN_B = 145,
+  MAX_R = 3471,
+  MAX_G = 3292,
+  MAX_B = 2727,
+  PURE_R = 255,
+  PURE_G = 255,
+  PURE_B = 30,
 };
 
-autoBrightness AB = autoBrightness(6);
-
+enum calibPressure : uint16_t {
+  MIN_P = 100,
+  MAX_P = 65535,
+  PURE_P = 4000,
+  MAX_VAR = 250,
+};
 
 void printText(String text, int x, int y, int textSize = 2, int r = 255,
                int g = 255, int b = 255) {
@@ -68,43 +49,103 @@ void setup() {
   printText("Starting", 18, 55);
   printText("up...", 35, 75);
   Serial.begin(9600);
-  AB.setState(false);
-  
+
   for (int i = 2; i <= led; i++)
     pinMode(i, OUTPUT);
   turnOff();
 
   ADS_setConfig(0xD2, 0xE5);
+  clear();
+  printText("Measuring...", 27, 65, 1, 255, 255, 255);
 }
 
 void loop() {
-  AB.run();
   resolveData();
-  printText("FUEL", 13, 10, 1, 20, 150, 200);
-  printText("ADULTERATION", 43, 10, 1, 20, 150, 200);
-  printText("DETECTION", 13, 20, 1, 20, 150, 200);
-  printText("SYSTEM", 75, 20, 1, 20, 150, 200);
+  printText("FUEL", 13, 7, 1, 20, 150, 200);
+  printText("ADULTERATION", 43, 7, 1, 20, 150, 200);
+  printText("DETECTION", 13, 17, 1, 20, 150, 200);
+  printText("SYSTEM", 75, 17, 1, 20, 150, 200);
 }
 
 void resolveData() {
   int16_t pressure = optimalPressure();
-  int density = pressure * 11.35 / 9.81 * 0.1;
-  if (density < 0) {
+  int r = 0;
+  int g = 0;
+  int b = 0;
+  for (int i = 0; i < 50; i++) {
+    r += red();
+    turnOff();
+    delay(20);
+    g += green();
+    turnOff();
+    delay(20);
+    b += blue();
+    turnOff();
+    delay(20);
+  }
+  r /= 50;
+  g /= 50;
+  b /= 50;
+  float purity = calculatePurity(pressure, r, g, b);
+  int density = pressure / 9.81 * 0.1;
+  clear();
+  if (density < -25005) {
     printText("Tank is", 30, 60, 2, 20, 50, 255);
     printText("empty!", 35, 80, 2, 20, 50, 255);
-
   } else {
-    printText("Pressure:", 20, 40, 1, 255, 150, 20);
-    printText(String(pressure) + " Pa", 20, 50, 1);
-    printText(String(density) + " Kg/m3", 20, 80, 1);
-    printText("Density:", 20, 70, 1, 255, 150, 20);
-
-    turnOn_2();
-    printText("Color:", 20, 100, 1, 255, 150, 20);
-    printText(detectClr(red(), green(), blue()), 20, 110, 1);
+    printText("Pressure:", 13, 30, 1, 255, 150, 20);
+    printText(String(pressure) + " Pa", 13, 40, 1);
+    printText(String(density) + " Kg/m3", 13, 65, 1);
+    printText("Density:", 13, 55, 1, 255, 150, 20);
+    printText("Color:", 13, 80, 1, 255, 150, 20);
+    uint8_t PERC_R, PERC_G, PERC_B;
+    if (purity >= 90) {
+      PERC_R = 20;
+      PERC_G = 255;
+      PERC_B = 20;
+    } else if (purity >= 70) {
+      PERC_R = 255;
+      PERC_G = 245;
+      PERC_B = 25;
+    } else if (purity >= 50) {
+      PERC_R = 255;
+      PERC_G = 110;
+      PERC_B = 25;
+    } else {
+      PERC_R = 255;
+      PERC_G = 24;
+      PERC_B = 25;
+    }
+    printText((String)purity + "%", 13, 120, 2, PERC_B, PERC_G, PERC_R);
+    printText("Purity:", 13, 108, 1, 255, 150, 20);
+    printText("as compared to GOI", 13, 137, 1, 20, 250, 155);
+    printText("GOI", 103, 137, 1, 20, 250, 155);
+    printText("standards.", 13, 147, 1, 20, 250, 155);
+    printText(detectClr(red(), green(), blue()), 13, 93, 1);
     turnOff();
   }
 }
+
+float optimalPressure() {
+  float pVal = .0;
+  for (int i = 0; i < 100; i++) {
+    pVal += ADS_A1();
+    delay(40);
+  }
+  return map(pVal / 100, MIN_P, MAX_P, 0, 65535);
+}
+
+float calculatePurity(float pressure, int r, int g, int b) {
+  float P_PURITY = abs(100 - (pressure / PURE_P) * 100);
+  float R_PURITY = abs(100 - (r / PURE_R) * 100);
+  float G_PURITY = abs(100 - (g / PURE_G) * 100);
+  float B_PURITY = abs(100 - (b / PURE_B) * 100);
+  float total = 100 * (100 * ((R_PURITY + G_PURITY + B_PURITY) / 300) + P_PURITY) / 200;
+  if (total > 100)
+    total = 100;
+  return 100 - total;
+}
+
 /*************************
 READ FROM ADS1115 A0 PORT
 **************************/
@@ -118,19 +159,8 @@ uint16_t ADS_A1() {
   if (Wire.available() == 2) {
     uint16_t val = Wire.read() << 8;
     val |= Wire.read();
-    Serial.println(val);
     return val;
   }
-}
-
-int16_t optimalPressure() {
-  float voltage = .0;
-  for (int i = 0; i < 100; i++) {
-    voltage += (ADS_A1() * 4.096) / 32768.0;
-    delay(20);
-  }
-  clear();
-  return ((((voltage / 100.0) - .5) * 1600000) / (4.5 - .5));
 }
 
 /*************************
@@ -146,67 +176,54 @@ void ADS_setConfig(uint8_t DATA_MSB, uint8_t DATA_LSB) {
 }
 
 /*************************
-RGB TO HEX CONVERSION
+COLOR DETECTION
 **************************/
 
-String detectClr(uint16_t r, uint16_t g, uint16_t b) {
-  int t = r + g + b;
-  String hexCode;
-  r = ((float)r / t) * 100.0;
-  g = ((float)g / t) * 100.0;
-  b = ((float)b / t) * 100.0;
-
-  r = 100 - r;
-  g = 100 - g;
-  b = 100 - b;
-  t = r + g + b;
-
-  r = 2.5 * (r * 100) / t;
-  g = 2.5 * (g * 100) / t;
-  b = 2.5 * (b * 100) / t;
-
-  hexCode = "#" + String(r / 16, HEX);
-  hexCode += String(r % 16, HEX);
-  hexCode += String(g / 16, HEX);
-  hexCode += String(g % 16, HEX);
-  hexCode += String(b / 16, HEX);
-  hexCode += String(b % 16, HEX);
-
+String detectClr(float r, float g, float b) {
+  char hexCode[13];
+  if (b <= 0 || b > MAX_R)
+    b = 0;
+  if (g <= 0 || g > MAX_G)
+    g = 0;
+  if (r <= 0 || r > MAX_R)
+    r = 0;
+  scr.fill(b, g, r);
+  scr.rect(60, 78, 10, 10);
+  sprintf(hexCode, "(%d,%d,%d)", (int)r, (int)g, (int)b);
   return hexCode;
 }
-
 
 /*************************
 COLOR INTENSITY MEASUREMENT
 **************************/
 
-uint16_t red() {
+int red() {
+  turnOn_2();
   digitalWrite(s2, LOW);
   digitalWrite(s3, LOW);
-  return (uint16_t)(pulseIn(OUT, HIGH) * 2.5);
+  return map(pulseIn(OUT, LOW), MIN_R, MAX_R, 255, 0);
 }
 
-uint16_t green() {
+int green() {
+  turnOn_2();
   digitalWrite(s2, HIGH);
   digitalWrite(s3, HIGH);
-  return (uint16_t)(pulseIn(OUT, HIGH) * 2.5);
+  return map(pulseIn(OUT, LOW), MIN_G, MAX_G, 255, 0);
 }
 
-uint16_t blue() {
+int blue() {
+  turnOn_2();
   digitalWrite(s2, LOW);
   digitalWrite(s3, HIGH);
-  return (uint16_t)(pulseIn(OUT, HIGH) * 2.5);
+  return map(pulseIn(OUT, LOW), MIN_B, MAX_B, 255, 0);
 }
 
 uint16_t exposure() {
+  turnOn_2();
   digitalWrite(s2, HIGH);
   digitalWrite(s3, LOW);
-  return (uint16_t)(pulseIn(OUT, LOW) * 2.5);
+  return (uint16_t)map(pulseIn(OUT, LOW), 10, 1500, 100, 0);
 }
-
-/*************************
-OUTPUT FREQUENCY SCALING
-**************************/
 
 void turnOff() {
   digitalWrite(led, LOW);
@@ -214,10 +231,14 @@ void turnOff() {
   digitalWrite(s1, LOW);
 }
 
+/*************************
+OUTPUT FREQUENCY SCALING
+**************************/
+
 void turnOn_2() {
   digitalWrite(led, HIGH);
-  digitalWrite(s0, HIGH);
-  digitalWrite(s1, LOW);
+  digitalWrite(s0, LOW);
+  digitalWrite(s1, HIGH);
 }
 
 void clear() {
